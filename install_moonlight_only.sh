@@ -1,51 +1,70 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-USER_NAME="clay"
-USER_HOME="/home/$USER_NAME"
-HOST_NAME="nemarion.local"
-APP_NAME="Desktop"  # Change if needed
+# ===== Config you can override via env when invoking =====
+HOST="${NEMARION_HOST:-nemarion.local}"   # Sunshine host
+USER_NAME="${TARGET_USER:-clay}"          # login user on the Pi
+WIDTH="${STREAM_WIDTH:-1600}"             # Upstar monitor native width
+HEIGHT="${STREAM_HEIGHT:-900}"            # Upstar monitor native height
+FPS="${STREAM_FPS:-60}"
+BITRATE="${STREAM_BITRATE:-20000}"        # kbps
+APP_NAME="${APP_NAME:-Desktop}"           # must match Sunshine app name
+DISABLE_CEC="${DISABLE_CEC:-1}"           # 1 = add -nocec (recommended on Pi3B+)
+SERVICE_NAME="cxf-moonlight"
+# ========================================================
 
-echo "=== Installing Moonlight Embedded for $USER_NAME ==="
+USER_HOME="$(eval echo "~${USER_NAME}")"
+USER_UID="$(id -u "${USER_NAME}")"
+SYSTEMD_DIR="${USER_HOME}/.config/systemd/user"
+CACHE_DIR="${USER_HOME}/.cache/moonlight"
+KEY_FILE="${CACHE_DIR}/client.pem"
 
-# Ensure dependencies (root only)
+# Helper: run as user with a valid session bus/runtime
+u() {
+  sudo -u "${USER_NAME}" \
+    XDG_RUNTIME_DIR="/run/user/${USER_UID}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_UID}/bus" \
+    "$@"
+}
+
+echo "== Moonlight Embedded install for ${USER_NAME} (Pi 3B+) =="
+
+# 1) Packages (Moonlight + CEC library) and refresh loader cache
 sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl
-
-# Add Moonlight Embedded repo if not already present
-if ! grep -q "moonlight-game-streaming" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' | sudo -E bash
-fi
-
-# Install Moonlight
+sudo apt-get install -y ca-certificates curl lsb-release libcec6
+curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' \
+  | distro=raspbian codename="$(lsb_release -cs)" sudo -E bash
+sudo apt-get update
 sudo apt-get install -y moonlight-embedded
+sudo ldconfig   # make sure libcec.so.6 is on the loader path
 
-# Remove old service if present
-echo "=== Removing old cxf-moonlight service if present ==="
-sudo -u "$USER_NAME" systemctl --user stop cxf-moonlight 2>/dev/null || true
-rm -f "$USER_HOME/.config/systemd/user/cxf-moonlight.service"
+# 2) Clean any old unit/config that might conflict
+u systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+u systemctl --user disable "${SERVICE_NAME}" 2>/dev/null || true
+rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service" 2>/dev/null || true
+rm -rf /root/.config/moonlight 2>/dev/null || true
 
-# Export required vars for systemctl --user in non-login shell
-export XDG_RUNTIME_DIR="/run/user/$(id -u $USER_NAME)"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+# 3) Ensure dirs and ownership
+mkdir -p "${CACHE_DIR}" "${SYSTEMD_DIR}"
+sudo chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.cache" "${USER_HOME}/.config"
 
-# Force pairing
-echo "=== Forcing clean pairing with $HOST_NAME ==="
-sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-    moonlight pair "$HOST_NAME"
+# 4) Build ExecStart (Desktop app, width/height, no CEC by default)
+CEC_FLAG=""
+[[ "${DISABLE_CEC}" == "1" ]] && CEC_FLAG="-nocec"
+EXEC_LINE="/usr/bin/moonlight stream -width ${WIDTH} -height ${HEIGHT} -fps ${FPS} -bitrate ${BITRATE} ${CEC_FLAG} -app \"${APP_NAME}\" ${HOST}"
 
-# Create systemd user service
-echo "=== Creating new cxf-moonlight service ==="
-mkdir -p "$USER_HOME/.config/systemd/user"
-cat > "$USER_HOME/.config/systemd/user/cxf-moonlight.service" <<EOF
+# 5) Write user‑mode systemd unit (waits for ~/.cache/moonlight/client.pem)
+cat > "${SYSTEMD_DIR}/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=Moonlight autostart to stream $HOST_NAME
+Description=Moonlight autostart to stream ${HOST}
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=%h/.cache/moonlight/client.pem
 
 [Service]
-ExecStart=/usr/bin/moonlight stream -width 1600 -height 900 -fps 60 -bitrate 20000 -nocec -app "$APP_NAME" $HOST_NAME
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/${USER_UID}
+ExecStart=${EXEC_LINE}
 Restart=on-failure
 RestartSec=3
 TTYPath=/dev/tty1
@@ -54,15 +73,28 @@ TTYPath=/dev/tty1
 WantedBy=default.target
 EOF
 
-# Reload and start service
-echo "=== Enabling and starting Moonlight service ==="
-sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-    systemctl --user daemon-reload
-sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-    systemctl --user enable cxf-moonlight
-sudo -u "$USER_NAME" env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-    systemctl --user start cxf-moonlight
+loginctl enable-linger "${USER_NAME}" >/dev/null 2>&1 || true
+u systemctl --user daemon-reload
+u systemctl --user enable "${SERVICE_NAME}"
 
-echo "=== Install complete! ==="
-echo "Check logs with:"
-echo "  sudo -u $USER_NAME env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS systemctl --user status cxf-moonlight"
+# 6) Force a clean pair (unpair -> pair) to avoid stale state
+u systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+u rm -f "${KEY_FILE}" || true
+u moonlight unpair "${HOST}" >/dev/null 2>&1 || true
+
+echo "-> Pairing (approve PIN in Sunshine on ${HOST})"
+sudo -u "${USER_NAME}" DISPLAY=:0 moonlight pair "${HOST}" || true
+
+# 7) Start if key exists; otherwise print next steps
+if [[ -f "${KEY_FILE}" ]]; then
+  echo "-- Key present at ${KEY_FILE}; starting ${SERVICE_NAME}"
+  u systemctl --user start "${SERVICE_NAME}"
+  echo "OK: Streaming should be live."
+else
+  echo "No key at ${KEY_FILE}. If you missed the PIN prompt, run:"
+  echo "  sudo -u ${USER_NAME} moonlight pair ${HOST}"
+  echo "Then start:"
+  echo "  sudo -u ${USER_NAME} systemctl --user start ${SERVICE_NAME}"
+fi
+
+echo "Logs: sudo -u ${USER_NAME} journalctl --user -u ${SERVICE_NAME} -f"
