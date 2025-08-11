@@ -1,30 +1,21 @@
 #!/usr/bin/env bash
-# Moonlight-only clean installer for Raspberry Pi (CXF-Sonnet)
-# - Installs moonlight-embedded from official repo
-# - Creates USER-MODE systemd service for the login user
-# - Handles DBUS/XDG env for --user commands from root
-# - Prompts/attempts pairing, then starts service
-
 set -euo pipefail
 
-# ---------- Config (override via env) ----------
-HOST="${NEMARION_HOST:-nemarion.local}"
-RES="${STREAM_RES:-1600x900}"       # 20" Upstar native
-FPS="${STREAM_FPS:-60}"
-BITRATE="${STREAM_BITRATE:-20000}"   # kbps
+HOST="nemarion.local"
+RES="1600x900"
+FPS="60"
+BITRATE="20000"
 SERVICE_NAME="cxf-moonlight"
-# ----------------------------------------------
 
-[[ $EUID -eq 0 ]] || { echo "Please run with sudo."; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "Run with sudo."; exit 1; }
 
-# Target user to own/run Moonlight
 TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 TARGET_HOME="$(eval echo "~${TARGET_USER}")"
 TARGET_UID="$(id -u "$TARGET_USER")"
 USER_SYSTEMD_DIR="${TARGET_HOME}/.config/systemd/user"
-KEYS_PATH="${TARGET_HOME}/.config/moonlight/keys/client.pem"
+KEYS_DIR="${TARGET_HOME}/.cache/moonlight"
+KEY_FILE="${KEYS_DIR}/client.pem"
 
-# Helper to run user commands with a proper session bus/runtime dir
 u() {
   sudo -u "$TARGET_USER" \
     XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
@@ -32,21 +23,14 @@ u() {
     "$@"
 }
 
-echo "== Moonlight install for user: ${TARGET_USER} (UID ${TARGET_UID}) =="
+echo "-- Cleaning old Moonlight"
+systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+u systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+u systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+rm -rf "$USER_SYSTEMD_DIR/$SERVICE_NAME.service" /root/.config/moonlight
 
-# --- Clean any old units/keys that could conflict ---
-echo "-- Cleaning previous ${SERVICE_NAME} units/keys (if any)"
-systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-rm -f "/etc/systemd/system/${SERVICE_NAME}.service" 2>/dev/null || true
-u systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
-u systemctl --user disable "${SERVICE_NAME}" 2>/dev/null || true
-rm -f "${USER_SYSTEMD_DIR}/${SERVICE_NAME}.service" 2>/dev/null || true
-# kill legacy root key path to avoid confusion
-rm -rf /root/.config/moonlight 2>/dev/null || true
-
-# --- Install Moonlight from official repo ---
-echo "-- Installing Moonlight (official repo)"
+echo "-- Installing moonlight-embedded"
 apt-get update
 apt-get install -y ca-certificates curl lsb-release
 curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' \
@@ -54,14 +38,46 @@ curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-e
 apt-get update
 apt-get install -y moonlight-embedded
 
-# --- Create user-mode systemd service ---
-echo "-- Creating user-mode systemd service"
-mkdir -p "${USER_SYSTEMD_DIR}"
+mkdir -p "$KEYS_DIR"
+chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.cache"
 
-cat > "${USER_SYSTEMD_DIR}/${SERVICE_NAME}.service" <<EOF
+mkdir -p "$USER_SYSTEMD_DIR"
+cat > "$USER_SYSTEMD_DIR/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=Moonlight autostart to stream ${HOST}
+Description=Moonlight autostart to stream $HOST
 After=network-online.target
+Wants=network-online.target
+ConditionPathExists=%h/.cache/moonlight/client.pem
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
+ExecStart=/usr/bin/moonlight stream $HOST --resolution $RES --fps $FPS --bitrate $BITRATE
+Restart=on-failure
+RestartSec=3
+TTYPath=/dev/tty1
+
+[Install]
+WantedBy=default.target
+EOF
+
+chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.config"
+loginctl enable-linger "$TARGET_USER" || true
+u systemctl --user daemon-reload
+u systemctl --user enable "$SERVICE_NAME"
+
+if [[ ! -f "$KEY_FILE" ]]; then
+  echo "-- Pairing required (PIN will appear in Sunshine on $HOST)"
+  u DISPLAY=:0 moonlight pair "$HOST" || true
+fi
+
+if [[ -f "$KEY_FILE" ]]; then
+  echo "-- Starting Moonlight service"
+  u systemctl --user start "$SERVICE_NAME"
+else
+  echo "Pairing failed: run manually ->"
+  echo "sudo -u $TARGET_USER XDG_RUNTIME_DIR=/run/user/$TARGET_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$TARGET_UID/bus DISPLAY=:0 moonlight pair $HOST"
+fi
 Wants=network-online.target
 # Only start after pairing exists (user key)
 ConditionPathExists=%h/.config/moonlight/keys/client.pem
