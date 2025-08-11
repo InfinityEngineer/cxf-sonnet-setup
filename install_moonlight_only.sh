@@ -31,13 +31,20 @@ u() {
 
 echo "== Moonlight Embedded install for ${USER_NAME} (Pi 3B+) =="
 
-# 1) Packages (Moonlight + CEC) and refresh loader cache
+# 1) Clean CEC packages first (fixes config file issues)
+sudo apt-get remove --purge libcec libcec3 libcec4 libcec6 2>/dev/null || true
+sudo apt-get autoremove -y
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl lsb-release libcec6
+
+# 2) Install Moonlight repository and packages
+sudo apt-get install -y ca-certificates curl lsb-release
 curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' \
   | distro=raspbian codename="$(lsb_release -cs)" sudo -E bash
 sudo apt-get update
 sudo apt-get install -y moonlight-embedded
+
+# 3) Clean install CEC library (prevents config file errors)
+sudo apt-get install -y libcec6
 sudo ldconfig
 
 # 2) Clean old unit/config
@@ -50,10 +57,14 @@ rm -rf /root/.config/moonlight 2>/dev/null || true
 mkdir -p "${CACHE_DIR}" "${SYSTEMD_DIR}"
 sudo chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/.cache" "${USER_HOME}/.config"
 
-# 4) ExecStart line - IMPORTANT: -nocec comes BEFORE 'stream'
+# 4) Clean moonlight config completely to avoid stale CEC settings
+rm -rf "${USER_HOME}/.config/moonlight" 2>/dev/null || true
+rm -rf "${CACHE_DIR}" 2>/dev/null || true
+
+# 5) ExecStart line - IMPORTANT: -nocec comes BEFORE 'stream'
 EXEC_LINE="/usr/bin/moonlight -nocec stream -width ${WIDTH} -height ${HEIGHT} -fps ${FPS} -bitrate ${BITRATE} -app ${APP_NAME} ${HOST}"
 
-# 5) Write user-mode systemd unit using safe method (no heredoc issues)
+# 6) Write user-mode systemd unit using safe method (no heredoc issues)
 cat > "${SYSTEMD_DIR}/${SERVICE_NAME}.service" << 'SYSTEMD_EOF'
 [Unit]
 Description=Moonlight autostart to stream __HOST__
@@ -84,7 +95,7 @@ loginctl enable-linger "${USER_NAME}" >/dev/null 2>&1 || true
 u systemctl --user daemon-reload
 u systemctl --user enable "${SERVICE_NAME}"
 
-# 6) Force clean pair (unpair -> pair)
+# 7) Force clean pair (unpair -> pair)
 u systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
 u rm -f "${KEY_FILE}" || true
 u moonlight unpair "${HOST}" >/dev/null 2>&1 || true
@@ -92,7 +103,7 @@ u moonlight unpair "${HOST}" >/dev/null 2>&1 || true
 echo "-> Pairing (approve PIN in Sunshine on ${HOST})"
 sudo -u "${USER_NAME}" DISPLAY=:0 moonlight pair "${HOST}" || true
 
-# 7) Start if key exists; otherwise print next steps
+# 8) Start if key exists; otherwise print next steps
 if [[ -f "${KEY_FILE}" ]]; then
   echo "-- Key present at ${KEY_FILE}; starting ${SERVICE_NAME}"
   u systemctl --user start "${SERVICE_NAME}"
