@@ -1,50 +1,45 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-HOST="nemarion.local"
-RES="1600x900"
-FPS="60"
-BITRATE="20000"
-SERVICE_NAME="cxf-moonlight"
+# === CONFIGURATION ===
+HOST="nemarion.local"        # Hostname or IP of the Sunshine PC
+RES="1920x1080"               # Resolution
+FPS="60"                      # FPS
+BITRATE="20000"               # Bitrate kbps
+SERVICE_NAME="cxf-moonlight"  # Systemd service name
+TARGET_USER="clay"            # Pi user that will run Moonlight
 
-[[ $EUID -eq 0 ]] || { echo "Run with sudo."; exit 1; }
+# === PREPARE SYSTEM ===
+echo "[*] Updating system..."
+sudo apt-get update
+sudo apt-get install -y curl apt-transport-https ca-certificates gpg
 
-TARGET_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
-TARGET_HOME="$(eval echo "~${TARGET_USER}")"
-TARGET_UID="$(id -u "$TARGET_USER")"
-USER_SYSTEMD_DIR="${TARGET_HOME}/.config/systemd/user"
-KEYS_DIR="${TARGET_HOME}/.cache/moonlight"
-KEY_FILE="${KEYS_DIR}/client.pem"
+echo "[*] Adding Moonlight Embedded repository..."
+curl -1sLf \
+  'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' \
+  | sudo -E bash
 
-u() {
-  sudo -u "$TARGET_USER" \
-    XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-    "$@"
-}
+echo "[*] Installing Moonlight Embedded..."
+sudo apt-get install -y moonlight-embedded
 
-echo "-- Cleaning old Moonlight"
-systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-u systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
-u systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
-rm -rf "$USER_SYSTEMD_DIR/$SERVICE_NAME.service" /root/.config/moonlight
+# === PAIR WITH HOST ===
+TARGET_UID=$(id -u "$TARGET_USER")
+TARGET_HOME=$(eval echo "~$TARGET_USER")
 
-echo "-- Installing moonlight-embedded"
-apt-get update
-apt-get install -y ca-certificates curl lsb-release
-curl -1sLf 'https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/setup.deb.sh' \
-  | distro=raspbian codename="$(lsb_release -cs)" sudo -E bash
-apt-get update
-apt-get install -y moonlight-embedded
+echo "[*] Starting pairing with $HOST..."
+sudo -u "$TARGET_USER" XDG_RUNTIME_DIR=/run/user/$TARGET_UID \
+  DISPLAY=:0 moonlight pair "$HOST" || true
 
-mkdir -p "$KEYS_DIR"
-chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.cache"
+echo "[*] Please approve the pairing on your Sunshine PC if prompted."
 
+# === CREATE SYSTEMD SERVICE ===
+USER_SYSTEMD_DIR="$TARGET_HOME/.config/systemd/user"
 mkdir -p "$USER_SYSTEMD_DIR"
-cat > "$USER_SYSTEMD_DIR/$SERVICE_NAME.service" <<EOF
+
+echo "[*] Creating systemd service at $USER_SYSTEMD_DIR/${SERVICE_NAME}.service..."
+cat <<EOF > "$USER_SYSTEMD_DIR/${SERVICE_NAME}.service"
 [Unit]
-Description=Moonlight autostart to stream $HOST
+Description=Moonlight autostart to stream ${HOST}
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=%h/.cache/moonlight/client.pem
@@ -52,7 +47,7 @@ ConditionPathExists=%h/.cache/moonlight/client.pem
 [Service]
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
-ExecStart=/usr/bin/moonlight stream $HOST --resolution $RES --fps $FPS --bitrate $BITRATE
+ExecStart=/usr/bin/moonlight stream ${HOST} --resolution ${RES} --fps ${FPS} --bitrate ${BITRATE}
 Restart=on-failure
 RestartSec=3
 TTYPath=/dev/tty1
@@ -61,7 +56,17 @@ TTYPath=/dev/tty1
 WantedBy=default.target
 EOF
 
-chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.config"
+# === ENABLE SERVICE ===
+echo "[*] Enabling Moonlight autostart service for $TARGET_USER..."
+sudo -u "$TARGET_USER" systemctl --user daemon-reload
+sudo -u "$TARGET_USER" systemctl --user enable "$SERVICE_NAME"
+
+echo
+echo "========================================================"
+echo "Moonlight installed and service created."
+echo "Run the following to start streaming now:"
+echo "sudo -u $TARGET_USER systemctl --user start $SERVICE_NAME"
+echo "========================================================"
 loginctl enable-linger "$TARGET_USER" || true
 u systemctl --user daemon-reload
 u systemctl --user enable "$SERVICE_NAME"
