@@ -98,3 +98,39 @@ else
 fi
 
 echo "Logs: sudo -u ${USER_NAME} journalctl --user -u ${SERVICE_NAME} -f"
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/${USER_UID}
+ExecStart=${EXEC_LINE}
+Restart=on-failure
+RestartSec=3
+TTYPath=/dev/tty1
+
+[Install]
+WantedBy=default.target
+EOF
+
+loginctl enable-linger "${USER_NAME}" >/dev/null 2>&1 || true
+u systemctl --user daemon-reload
+u systemctl --user enable "${SERVICE_NAME}"
+
+# 6) Force a clean pair (unpair -> pair) to avoid stale state
+u systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+u rm -f "${KEY_FILE}" || true
+u moonlight unpair "${HOST}" >/dev/null 2>&1 || true
+
+echo "-> Pairing (approve PIN in Sunshine on ${HOST})"
+sudo -u "${USER_NAME}" DISPLAY=:0 moonlight pair "${HOST}" || true
+
+# 7) Start if key exists; otherwise print next steps
+if [[ -f "${KEY_FILE}" ]]; then
+  echo "-- Key present at ${KEY_FILE}; starting ${SERVICE_NAME}"
+  u systemctl --user start "${SERVICE_NAME}"
+  echo "OK: Streaming should be live."
+else
+  echo "No key at ${KEY_FILE}. If you missed the PIN prompt, run:"
+  echo "  sudo -u ${USER_NAME} moonlight pair ${HOST}"
+  echo "Then start:"
+  echo "  sudo -u ${USER_NAME} systemctl --user start ${SERVICE_NAME}"
+fi
+
+echo "Logs: sudo -u ${USER_NAME} journalctl --user -u ${SERVICE_NAME} -f"
