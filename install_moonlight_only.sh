@@ -2,7 +2,8 @@
 set -euo pipefail
 
 HOST="${NEMARION_HOST:-nemarion.local}"
-RES="${STREAM_RES:-1600x900}"
+WIDTH="${STREAM_WIDTH:-1600}"
+HEIGHT="${STREAM_HEIGHT:-900}"
 FPS="${STREAM_FPS:-60}"
 BITRATE="${STREAM_BITRATE:-20000}"
 SERVICE_NAME="cxf-moonlight"
@@ -44,7 +45,7 @@ fi
 mkdir -p "${CACHE_DIR}" "${SYSTEMD_DIR}"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${TARGET_HOME}/.cache" "${TARGET_HOME}/.config"
 
-# Create service file (short arg format)
+# Create service file using width/height flags
 cat <<EOF > "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
 [Unit]
 Description=Moonlight autostart to stream ${HOST}
@@ -55,7 +56,7 @@ ConditionPathExists=%h/.cache/moonlight/client.pem
 [Service]
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
-ExecStart=/usr/bin/moonlight stream ${HOST} ${RES} -fps ${FPS} -bitrate ${BITRATE}
+ExecStart=/usr/bin/moonlight stream ${HOST} -width ${WIDTH} -height ${HEIGHT} -fps ${FPS} -bitrate ${BITRATE}
 Restart=on-failure
 RestartSec=3
 TTYPath=/dev/tty1
