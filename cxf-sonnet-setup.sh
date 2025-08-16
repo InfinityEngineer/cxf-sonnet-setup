@@ -28,8 +28,8 @@ fi
 ID="$(. /etc/os-release && echo "${ID:-unknown}")"
 VERSION_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-unknown}")"
 ARCH="$(dpkg --print-architecture)"
-if [[ "$ID" != "raspbian" || "$VERSION_CODENAME" != "bookworm" || "$ARCH" != "arm64" ]]; then
-  err "This script targets Raspberry Pi OS (raspbian) Bookworm 64-bit (arm64). Detected: ID=$ID, codename=$VERSION_CODENAME, arch=$ARCH"
+if [[ "$VERSION_CODENAME" != "bookworm" || "$ARCH" != "arm64" ]]; then
+  err "This script targets Raspberry Pi OS Bookworm 64-bit (arm64). Detected: ID=$ID, codename=$VERSION_CODENAME, arch=$ARCH"
   exit 1
 fi
 
