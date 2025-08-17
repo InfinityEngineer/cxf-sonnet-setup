@@ -76,15 +76,15 @@ ML_KEYRING="/usr/share/keyrings/moonlight-embedded-archive-keyring.gpg"
 ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
 
 # Cleanup old/broken keyrings first
-sudo rm -f /usr/share/keyrings/moonlight-embedded-archive-keyring.gpg* || true
+sudo rm -f "$ML_KEYRING"* || true
 
-# Always refresh the keyring to avoid stale prompts
-curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
+# Always refresh the keyring from Cloudsmith canonical location
+curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key" | \
   gpg --dearmor | sudo tee "$ML_KEYRING" >/dev/null
 sudo chmod 0644 "$ML_KEYRING"
 
 backup_file_once "$ML_LIST"
-echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/raspbian bookworm main" | \
+echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/debian bookworm main" | \
   sudo tee "$ML_LIST" >/dev/null
 
 for f in /etc/apt/sources.list.d/*.list; do
@@ -92,7 +92,7 @@ for f in /etc/apt/sources.list.d/*.list; do
   if grep -q "moonlight-game-streaming/moonlight-embedded" "$f"; then
     sudo sed -i -E \
       -e "s|signed-by=[^]]*|signed-by=$ML_KEYRING|g" \
-      -e "s|/deb/debian |/deb/raspbian |g" "$f"
+      -e "s|/deb/raspbian |/deb/debian |g" "$f"
   fi
 done
 
