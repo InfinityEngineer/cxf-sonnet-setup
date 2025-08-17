@@ -72,10 +72,10 @@ sudo systemctl enable --now tailscaled >/dev/null
 log "Configuring Moonlight Embedded repo/key"
 ensure_dir "/usr/share/keyrings" 0755
 
-ML_KEYRING="/usr/share/keyrings/moonlight-embedded.gpg"
+ML_KEYRING="/usr/share/keyrings/moonlight-embedded-archive-keyring.gpg"
 if [[ ! -f "$ML_KEYRING" ]]; then
-  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key | \
-    sudo tee "$ML_KEYRING" >/dev/null
+  curl -1sLf "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
+    gpg --dearmor | sudo tee "$ML_KEYRING" >/dev/null
   sudo chmod 0644 "$ML_KEYRING"
 fi
 
