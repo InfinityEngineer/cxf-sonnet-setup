@@ -18,7 +18,7 @@ warn() { echo "${CXF_TAG} WARN: $*"; }
 ensure_dir() { sudo install -d -m "${2:-0755}" "$1" 2>/dev/null || true; sudo chown "${3:-root:root}" "$1" || true; }
 backup_file_once() { local f="$1"; if [[ -f "$f" && ! -f "$f.cxf.bak" ]]; then sudo cp -a "$f" "$f.cxf.bak"; fi }
 append_if_missing() { local line="$1" file="$2"; grep -Fqx "$line" "$file" 2>/dev/null || echo "$line" | sudo tee -a "$file" >/dev/null; }
-replace_or_append_kv() { local file="$1" key="$2" val="$3"; backup_file_once "$file"; if grep -Eq "^\s*${key}\s*=" "$file" 2>/dev/null; then sudo sed -i "s|^\s*${key}\s*=.*|${key}=${val}|" "$file"; else echo "${key}=${val}" | sudo tee -a "$file" >/dev/null; fi }
+replace_or_append_kv() { local file="$1" key="$2" val="$3"; backup_file_once "$file"; if grep -Eq "^\\s*${key}\\s*=" "$file" 2>/dev/null; then sudo sed -i "s|^\\s*${key}\\s*=.*|${key}=${val}|" "$file"; else echo "${key}=${val}" | sudo tee -a "$file" >/dev/null; fi }
 cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
 # --- APT Preflight: quarantine conflicting Moonlight sources --------------------
@@ -84,6 +84,12 @@ backup_file_once "$ML_LIST"
 echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/raspbian bookworm main" | \
   sudo tee "$ML_LIST" >/dev/null
 
+# Import Cloudsmith root key as fallback
+if ! apt-key list 2>/dev/null | grep -q "5AEE46706CF0453E"; then
+  curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
+    sudo gpg --dearmor -o "$ML_KEYRING" >/dev/null 2>&1 || true
+fi
+
 for f in /etc/apt/sources.list.d/*.list; do
   [[ -e "$f" ]] || continue
   if grep -q "moonlight-game-streaming/moonlight-embedded" "$f"; then
@@ -91,7 +97,7 @@ for f in /etc/apt/sources.list.d/*.list; do
       -e "s|signed-by=[^]]*|signed-by=$ML_KEYRING|g" \
       -e "s|/deb/debian |/deb/raspbian |g" "$f"
   fi
-done
+ done
 
 sudo apt-get update -qq || true
 if ! dpkg -s moonlight-embedded >/dev/null 2>&1; then
