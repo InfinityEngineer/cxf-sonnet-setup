@@ -73,22 +73,19 @@ log "Configuring Moonlight Embedded repo/key"
 ensure_dir "/usr/share/keyrings" 0755
 
 ML_KEYRING="/usr/share/keyrings/moonlight-embedded-archive-keyring.gpg"
-if [[ ! -f "$ML_KEYRING" ]]; then
-  curl -1sLf "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
-    gpg --dearmor | sudo tee "$ML_KEYRING" >/dev/null
-  sudo chmod 0644 "$ML_KEYRING"
-fi
-
 ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
+
+# Cleanup old/broken keyrings first
+sudo rm -f /usr/share/keyrings/moonlight-embedded-archive-keyring.gpg* || true
+
+# Always refresh the keyring to avoid stale prompts
+curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
+  gpg --dearmor | sudo tee "$ML_KEYRING" >/dev/null
+sudo chmod 0644 "$ML_KEYRING"
+
 backup_file_once "$ML_LIST"
 echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/raspbian bookworm main" | \
   sudo tee "$ML_LIST" >/dev/null
-
-# Import Cloudsmith root key as fallback
-if ! apt-key list 2>/dev/null | grep -q "5AEE46706CF0453E"; then
-  curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key" | \
-    sudo gpg --dearmor -o "$ML_KEYRING" >/dev/null 2>&1 || true
-fi
 
 for f in /etc/apt/sources.list.d/*.list; do
   [[ -e "$f" ]] || continue
@@ -97,7 +94,7 @@ for f in /etc/apt/sources.list.d/*.list; do
       -e "s|signed-by=[^]]*|signed-by=$ML_KEYRING|g" \
       -e "s|/deb/debian |/deb/raspbian |g" "$f"
   fi
- done
+done
 
 sudo apt-get update -qq || true
 if ! dpkg -s moonlight-embedded >/dev/null 2>&1; then
