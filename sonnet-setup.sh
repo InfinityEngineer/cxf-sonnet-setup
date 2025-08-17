@@ -21,6 +21,15 @@ append_if_missing() { local line="$1" file="$2"; grep -Fqx "$line" "$file" 2>/de
 replace_or_append_kv() { local file="$1" key="$2" val="$3"; backup_file_once "$file"; if grep -Eq "^\s*${key}\s*=" "$file" 2>/dev/null; then sudo sed -i "s|^\s*${key}\s*=.*|${key}=${val}|" "$file"; else echo "${key}=${val}" | sudo tee -a "$file" >/dev/null; fi }
 cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# --- APT Preflight: quarantine conflicting Moonlight sources --------------------
+# Prevent early 'Signed-By' conflicts during the very first apt-get update.
+ensure_dir "/etc/apt/sources.list.d.disabled" 0755
+shopt -s nullglob || true
+for f in /etc/apt/sources.list.d/*moonlight*; do
+  sudo mv -f "$f" "/etc/apt/sources.list.d.disabled/$(basename "$f").cxf.disabled" || true
+done
+shopt -u nullglob || true
+
 # --- Base OS Prep ----------------------------------------------------------------
 log "Updating apt package lists"
 sudo apt-get update -qq || true
@@ -99,27 +108,3 @@ sudo apt-get update -qq || true
 if ! dpkg -s moonlight-embedded >/dev/null 2>&1; then
   sudo apt-get install "${APT_OPTS[@]}" moonlight-embedded || warn "Moonlight install may have failed; run 'apt-cache policy moonlight-embedded' to inspect."
 fi
- ----------------------------------------------------------
-log "Configuring Moonlight Embedded repo/key"
-ensure_dir "/usr/share/keyrings" 0755
-# Remove any stale or conflicting moonlight list files
-sudo rm -f /etc/apt/sources.list.d/moonlight-embedded.list /etc/apt/sources.list.d/*moonlight* || true
-
-if [[ ! -f /usr/share/keyrings/moonlight-embedded.gpg ]]; then
-  log "Fetching Moonlight repo key from Cloudsmith"
-  if ! curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/moonlight-embedded.gpg; then
-    warn "Failed to fetch Moonlight key. Check network or URL."
-  fi
-fi
-ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
-echo "deb [signed-by=/usr/share/keyrings/moonlight-embedded.gpg] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/debian bookworm main" | sudo tee "$ML_LIST" >/dev/null
-
-log "Running apt-get update for Moonlight"
-sudo apt-get update || warn "apt-get update had issues"
-
-log "Installing Moonlight Embedded"
-if ! sudo apt-get install "${APT_OPTS[@]}" moonlight-embedded; then
-  warn "Moonlight install failed. Run 'apt-get install moonlight-embedded' manually to debug."
-fi
-
-# --- rest of script remains unchanged ---
