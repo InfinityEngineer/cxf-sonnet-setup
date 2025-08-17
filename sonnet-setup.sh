@@ -24,6 +24,10 @@ cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
 umask 022
 
+# --- Version (bump when editing) --------------------------------------------
+CXF_VERSION="1.6.0"
+log "Runner: CXF‑Sonnet setup $CXF_VERSION"
+
 # --- APT Preflight: quarantine conflicting Moonlight sources --------------------
 ensure_dir "/etc/apt/sources.list.d.disabled" 0755
 shopt -s nullglob || true
@@ -129,14 +133,6 @@ NOCEC=1
 EOF
 fi
 
-install_exec() { # install_exec <path> 
-<content>
-  local dst="$1"; shift
-  sudo tee "$dst" >/dev/null <<'SH'
-PLACEHOLDER
-SH
-  # Replace placeholder with caller-provided heredoc via sed-safe approach
-}
 
 # moonlight-start.sh
 sudo tee /usr/local/sbin/moonlight-start.sh >/dev/null <<'SH'
@@ -350,7 +346,7 @@ TSIP=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | xar
 CFG_HOST=$(awk -F= '/^HOST=/{print $2}' "$CFG" 2>/dev/null || echo nemarion.local)
 
 echo
-log "Setup complete"
+log "Setup complete (version $CXF_VERSION)"
 [[ -n "$IP4S" ]] && echo "${CXF_TAG} LAN IPs: $IP4S"
 [[ -n "$TSIP" ]] && echo "${CXF_TAG} Tailscale IP: $TSIP"
 echo "${CXF_TAG} To bring Tailscale up (if not already):
@@ -360,69 +356,3 @@ echo "${CXF_TAG} Moonlight check:
 echo "${CXF_TAG} BirdNET-Go logs:
   journalctl -u birdnet-go -f"
 echo "${CXF_TAG} Reminder: reboot if you just changed HDMI/KMS overlay."
-  curl wget unzip git vim ca-certificates gnupg lsb-release build-essential cmake \
-  libasound2-dev logrotate jq >/dev/null
-
-# Ensure KMS and GPU mem on Bookworm
-CONFIG_TXT="/boot/firmware/config.txt"
-if [[ -f "$CONFIG_TXT" ]]; then
-  backup_file_once "$CONFIG_TXT"
-  append_if_missing "dtoverlay=vc4-kms-v3d" "$CONFIG_TXT"
-  if grep -Eq "^gpu_mem=" "$CONFIG_TXT"; then sudo sed -i "s/^gpu_mem=.*/gpu_mem=256/" "$CONFIG_TXT"; else echo "gpu_mem=256" | sudo tee -a "$CONFIG_TXT" >/dev/null; fi
-else
-  warn "$CONFIG_TXT not found (non‑standard image?). Skipping KMS tweak."
-fi
-
-# --- Tailscale -------------------------------------------------------------------
-log "Configuring Tailscale repo/key"
-ensure_dir "/usr/share/keyrings" 0755
-OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"') || OS_ID="debian"
-TS_PATH="debian"
-[[ "$OS_ID" =~ (raspbian|raspberrypi) ]] && TS_PATH="raspbian"
-
-if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
-  curl -fsSL "https://pkgs.tailscale.com/stable/${TS_PATH}/bookworm.noarmor.gpg" | \
-    sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null || true
-fi
-
-TS_LIST="/etc/apt/sources.list.d/tailscale.list"
-backup_file_once "$TS_LIST"
-echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${TS_PATH} bookworm main" | \
-  sudo tee "$TS_LIST" >/dev/null
-
-sudo apt-get update -qq || true
-sudo apt-get install "${APT_OPTS[@]}" tailscale tailscale-archive-keyring >/dev/null || true
-sudo systemctl enable --now tailscaled >/dev/null
-
-# --- Moonlight Embedded ----------------------------------------------------------
-log "Configuring Moonlight Embedded repo/key"
-ensure_dir "/usr/share/keyrings" 0755
-
-ML_KEYRING="/usr/share/keyrings/moonlight-embedded-archive-keyring.gpg"
-ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
-
-# Cleanup old/broken keyrings first
-sudo rm -f "$ML_KEYRING"* || true
-
-# Always refresh the keyring from Cloudsmith canonical location
-curl -fsSL "https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key" | \
-  gpg --dearmor | sudo tee "$ML_KEYRING" >/dev/null
-sudo chmod 0644 "$ML_KEYRING"
-
-backup_file_once "$ML_LIST"
-echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/debian bookworm main" | \
-  sudo tee "$ML_LIST" >/dev/null
-
-for f in /etc/apt/sources.list.d/*.list; do
-  [[ -e "$f" ]] || continue
-  if grep -q "moonlight-game-streaming/moonlight-embedded" "$f"; then
-    sudo sed -i -E \
-      -e "s|signed-by=[^]]*|signed-by=$ML_KEYRING|g" \
-      -e "s|/deb/raspbian |/deb/debian |g" "$f"
-  fi
-done
-
-sudo apt-get update -qq || true
-if ! dpkg -s moonlight-embedded >/dev/null 2>&1; then
-  sudo apt-get install "${APT_OPTS[@]}" moonlight-embedded || warn "Moonlight install may have failed; run 'apt-cache policy moonlight-embedded' to inspect."
-fi
