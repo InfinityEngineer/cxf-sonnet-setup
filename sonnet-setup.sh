@@ -4,7 +4,7 @@
 # Idempotent, logged, strict mode. Creates Moonlight + BirdNET-Go + Tailscale.
 #
 # Usage (after you upload this file to your repo):
-#   curl -fsSL https://raw.githubusercontent.com/<me>/<repo>/main/sonnet-setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/InfinityEngineer/cxf-sonnet-setup/main/sonnet-setup.sh | sudo bash
 # -----------------------------------------------------------------------------
 set -euo pipefail
 IFS=$'\n\t'
@@ -42,7 +42,7 @@ fi
 
 # --- Tailscale -------------------------------------------------------------------
 log "Configuring Tailscale repo/key"
-ensure_dir "$SUDO" "/usr/share/keyrings" 0755
+ensure_dir "/usr/share/keyrings" 0755
 if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
   curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | \
     $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
@@ -57,21 +57,20 @@ $SUDO systemctl enable --now tailscaled >/dev/null
 
 # --- Moonlight Embedded ----------------------------------------------------------
 log "Configuring Moonlight Embedded repo/key"
-ensure_dir "$SUDO" "/usr/share/keyrings" 0755
+ensure_dir "/usr/share/keyrings" 0755
 # Moonlight Embedded official Cloudsmith repo (Debian/Bookworm)
 if [[ ! -f /usr/share/keyrings/moonlight-embedded.gpg ]]; then
-  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.6E11C1D7F0/public.gpg | \
+  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key | \
     $SUDO gpg --dearmor -o /usr/share/keyrings/moonlight-embedded.gpg
 fi
 ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
 backup_file_once "$ML_LIST"
-echo "deb [signed-by=/usr/share/keyrings/moonlight-embedded.gpg] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/debian bookworm main" | \
-  $SUDO tee "$ML_LIST" >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/moonlight-embedded.gpg] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/debian bookworm main" | $SUDO tee "$ML_LIST" >/dev/null
 $SUDO apt-get update -qq || true
 $SUDO apt-get install "${APT_OPTS[@]}" moonlight-embedded >/dev/null
 
 # Moonlight config and helpers
-ensure_dir "$SUDO" "/etc" 0755
+ensure_dir "/etc" 0755
 CONF="/etc/moonlight-sonnet.conf"
 backup_file_once "$CONF"
 if [[ ! -f "$CONF" ]]; then
@@ -88,7 +87,7 @@ CFG
 fi
 
 # Logging
-ensure_dir "$SUDO" "/var/log/moonlight" 0755
+ensure_dir "/var/log/moonlight" 0755
 $SUDO touch /var/log/moonlight/sonnet.log /var/log/moonlight/pair.log
 
 # Helper: moonlight-resolution.sh (optional boot override with 10s prompt)
@@ -198,8 +197,8 @@ BNG_SVC="/etc/systemd/system/birdnet-go.service"
 
 log "Installing BirdNET-Go (latest release)"
 if ! id -u "$BNG_USER" >/dev/null 2>&1; then $SUDO useradd -r -s /usr/sbin/nologin "$BNG_USER"; fi
-ensure_dir "$SUDO" "$BNG_DIR" 0755 "$BNG_USER:$BNG_USER"
-ensure_dir "$SUDO" "$BNG_DATA" 0755 "$BNG_USER:$BNG_USER"
+ensure_dir "$BNG_DIR" 0755 "$BNG_USER:$BNG_USER"
+ensure_dir "$BNG_DATA" 0755 "$BNG_USER:$BNG_USER"
 
 # Fetch latest arm64 release tarball via GitHub API
 TMPD=$(mktemp -d)
