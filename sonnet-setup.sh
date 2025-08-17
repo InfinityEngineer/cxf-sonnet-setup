@@ -25,7 +25,8 @@ cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 umask 022
 
 # --- Version (bump when editing) --------------------------------------------
-CXF_VERSION="1.6.0"
+CXF_VERSION="1.6.3"
+/bin/echo "[CXF] Runner: CXF‑Sonnet setup $CXF_VERSION"
 log "Runner: CXF‑Sonnet setup $CXF_VERSION"
 
 # --- APT Preflight: quarantine conflicting Moonlight sources --------------------
