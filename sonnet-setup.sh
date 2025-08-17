@@ -22,7 +22,6 @@ replace_or_append_kv() { local file="$1" key="$2" val="$3"; backup_file_once "$f
 cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
 # --- APT Preflight: quarantine conflicting Moonlight sources --------------------
-# Prevent early 'Signed-By' conflicts during the very first apt-get update.
 ensure_dir "/etc/apt/sources.list.d.disabled" 0755
 shopt -s nullglob || true
 for f in /etc/apt/sources.list.d/*moonlight*; do
@@ -51,12 +50,10 @@ fi
 # --- Tailscale -------------------------------------------------------------------
 log "Configuring Tailscale repo/key"
 ensure_dir "/usr/share/keyrings" 0755
-# Detect RPi OS vs Debian to pick correct path (raspbian vs debian)
 OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"') || OS_ID="debian"
 TS_PATH="debian"
 [[ "$OS_ID" =~ (raspbian|raspberrypi) ]] && TS_PATH="raspbian"
 
-# Install/refresh keyring (dearmored) at a consistent path
 if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
   curl -fsSL "https://pkgs.tailscale.com/stable/${TS_PATH}/bookworm.noarmor.gpg" | \
     sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null || true
@@ -72,103 +69,21 @@ sudo apt-get install "${APT_OPTS[@]}" tailscale tailscale-archive-keyring >/dev/
 sudo systemctl enable --now tailscaled >/dev/null
 
 # --- Moonlight Embedded ----------------------------------------------------------
-log "Configuring Moonlight Embedded repo/key (normalize signed-by, prefer raspbian path)"
+log "Configuring Moonlight Embedded repo/key"
 ensure_dir "/usr/share/keyrings" 0755
 
-# 1) Choose a single keyring path. If an existing Moonlight list has signed-by, reuse it.
-ML_EXISTING_KEYRING=$(grep -RhoE 'signed-by=([^]]+)' /etc/apt/sources.list.d/*.list 2>/dev/null | \
-  grep -E 'moonlight|game-streaming' | head -n1 | cut -d= -f2 || true)
-ML_KEYRING="${ML_EXISTING_KEYRING:-/usr/share/keyrings/moonlight-game-streaming_moonlight-embedded-archive-keyring.gpg}"
-
-# 2) Ensure the keyring file exists at ML_KEYRING
+ML_KEYRING="/usr/share/keyrings/moonlight-embedded.gpg"
 if [[ ! -f "$ML_KEYRING" ]]; then
-  # Prefer armored and dearmor to our path
-  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key | \
-    sudo gpg --dearmor -o "$ML_KEYRING"
+  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.5AEE46706CF0453E.key | \
+    sudo tee "$ML_KEYRING" >/dev/null
   sudo chmod 0644 "$ML_KEYRING"
 fi
 
-# 3) Canonical source: use raspbian/bookworm (works on RPi OS) with our chosen keyring
 ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
 backup_file_once "$ML_LIST"
 echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/raspbian bookworm main" | \
   sudo tee "$ML_LIST" >/dev/null
 
-# 4) Normalize ANY stray Moonlight entries to use the same signed-by AND raspbian path to avoid conflicts
-for f in /etc/apt/sources.list.d/*.list; do
-  [[ -e "$f" ]] || continue
-  if grep -q "moonlight-game-streaming/moonlight-embedded" "$f"; then
-    sudo sed -i -E \
-      -e "s|signed-by=[^]]*|signed-by=$ML_KEYRING|g" \
-      -e "s|/deb/debian |/deb/raspbian |g" "$f"
-  fi
-done
-
-sudo apt-get update -qq || true
-if ! dpkg -s moonlight-embedded >/dev/null 2>&1; then
-  sudo apt-get install "${APT_OPTS[@]}" moonlight-embedded || warn "Moonlight install may have failed; run 'apt-cache policy moonlight-embedded' to inspect."
-fi
-sudo apt-get install "${APT_OPTS[@]}" \
-  curl wget unzip git vim ca-certificates gnupg lsb-release build-essential cmake \
-  libasound2-dev logrotate jq >/dev/null
-
-# Ensure KMS and GPU mem on Bookworm
-CONFIG_TXT="/boot/firmware/config.txt"
-if [[ -f "$CONFIG_TXT" ]]; then
-  backup_file_once "$CONFIG_TXT"
-  append_if_missing "dtoverlay=vc4-kms-v3d" "$CONFIG_TXT"
-  if grep -Eq "^gpu_mem=" "$CONFIG_TXT"; then sudo sed -i "s/^gpu_mem=.*/gpu_mem=256/" "$CONFIG_TXT"; else echo "gpu_mem=256" | sudo tee -a "$CONFIG_TXT" >/dev/null; fi
-else
-  warn "$CONFIG_TXT not found (non‑standard image?). Skipping KMS tweak."
-fi
-
-# --- Tailscale -------------------------------------------------------------------
-log "Configuring Tailscale repo/key"
-ensure_dir "/usr/share/keyrings" 0755
-# Detect RPi OS vs Debian to pick correct path (raspbian vs debian)
-OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"') || OS_ID="debian"
-TS_PATH="debian"
-[[ "$OS_ID" =~ (raspbian|raspberrypi) ]] && TS_PATH="raspbian"
-
-# Install/refresh keyring (dearmored) at a consistent path
-if [[ ! -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
-  curl -fsSL "https://pkgs.tailscale.com/stable/${TS_PATH}/bookworm.noarmor.gpg" | \
-    sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null || true
-fi
-
-TS_LIST="/etc/apt/sources.list.d/tailscale.list"
-backup_file_once "$TS_LIST"
-echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${TS_PATH} bookworm main" | \
-  sudo tee "$TS_LIST" >/dev/null
-
-sudo apt-get update -qq || true
-sudo apt-get install "${APT_OPTS[@]}" tailscale tailscale-archive-keyring >/dev/null || true
-sudo systemctl enable --now tailscaled >/dev/null
-
-# --- Moonlight Embedded ----------------------------------------------------------
-log "Configuring Moonlight Embedded repo/key (normalize signed-by, prefer raspbian path)"
-ensure_dir "/usr/share/keyrings" 0755
-
-# 1) Choose a single keyring path. If an existing Moonlight list has signed-by, reuse it.
-ML_EXISTING_KEYRING=$(grep -RhoE 'signed-by=([^]]+)' /etc/apt/sources.list.d/*.list 2>/dev/null | \
-  grep -E 'moonlight|game-streaming' | head -n1 | cut -d= -f2 || true)
-ML_KEYRING="${ML_EXISTING_KEYRING:-/usr/share/keyrings/moonlight-game-streaming_moonlight-embedded-archive-keyring.gpg}"
-
-# 2) Ensure the keyring file exists at ML_KEYRING
-if [[ ! -f "$ML_KEYRING" ]]; then
-  # Prefer armored and dearmor to our path
-  curl -fsSL https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/gpg.key | \
-    sudo gpg --dearmor -o "$ML_KEYRING"
-  sudo chmod 0644 "$ML_KEYRING"
-fi
-
-# 3) Canonical source: use raspbian/bookworm (works on RPi OS) with our chosen keyring
-ML_LIST="/etc/apt/sources.list.d/moonlight-embedded.list"
-backup_file_once "$ML_LIST"
-echo "deb [signed-by=$ML_KEYRING] https://dl.cloudsmith.io/public/moonlight-game-streaming/moonlight-embedded/deb/raspbian bookworm main" | \
-  sudo tee "$ML_LIST" >/dev/null
-
-# 4) Normalize ANY stray Moonlight entries to use the same signed-by AND raspbian path to avoid conflicts
 for f in /etc/apt/sources.list.d/*.list; do
   [[ -e "$f" ]] || continue
   if grep -q "moonlight-game-streaming/moonlight-embedded" "$f"; then
